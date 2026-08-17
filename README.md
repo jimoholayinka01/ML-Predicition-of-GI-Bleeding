@@ -3,6 +3,8 @@
 A reproducible R-based project demonstrating development, evaluation, and deployment of a machine-learning model that predicts risk of gastrointestinal (GI) bleeding using the Eunomia OMOP OHDSI Common Data Model. The repository contains data extracts OHDSI/Eunomia, analysis and feature-engineering in an R Markdown workflow, and a Shiny application for patient-level risk assessment using the final XGBoost model.
 
 ---
+Model available for demo:
+https://huggingface.co/spaces/olayimika01/GI_Bleeding_UI
 
 ## Key contents
 

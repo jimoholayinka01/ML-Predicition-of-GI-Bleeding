@@ -1,0 +1,2869 @@
+```{r}
+# Install required packages (Run once only)
+# =============================================================================
+
+install.packages(c(
+  "DBI",
+  "DatabaseConnector",
+  "dplyr",
+  "dbplyr",
+  "tidyr",
+  "tibble",
+  "ggplot2",
+  "knitr",
+  "kableExtra",
+  "remotes",
+  "synthpop",
+  "rsample",
+  "glmnet",
+  "randomForest",
+  "xgboost",
+  "gbm",
+  "e1071",
+  "pROC",
+  "PRROC",
+  "caret",
+  "recipes",
+  "glmnet",
+  "kernlab"
+  
+  
+))
+
+# Install OHDSI packages
+remotes::install_github("OHDSI/CommonDataModel")
+remotes::install_github("OHDSI/Eunomia")
+```
+
+```{r}
+# =============================================================================
+# Load Required Libraries
+# =============================================================================
+
+library(Eunomia)
+library(DatabaseConnector)
+library(CommonDataModel)
+library(DBI)
+
+library(dplyr)
+library(dbplyr)
+library(tidyr)
+library(tibble)
+
+library(ggplot2)
+library(knitr)
+library(synthpop)
+library(glmnet)
+library(randomForest)
+library(xgboost)
+library(gbm)
+library(e1071)
+library(pROC)
+library(PRROC)
+library(caret)
+library(recipes)
+library(glmnet)
+library(kernlab)
+
+```
+```{r}
+# ============================================================
+# V2: FULL EUNOMIA GIBLEED POPULATION
+# ============================================================
+
+person <- readr::read_csv(
+  "data/GiBleed/PERSON.csv",
+  show_col_types = FALSE
+) %>%
+  rename_with(tolower)
+
+drug_exposure <- readr::read_csv(
+  "data/GiBleed/DRUG_EXPOSURE.csv",
+  show_col_types = FALSE
+) %>%
+  rename_with(tolower)
+
+condition_occurrence <- readr::read_csv(
+  "data/GiBleed/CONDITION_OCCURRENCE.csv",
+  show_col_types = FALSE
+) %>%
+  rename_with(tolower)
+
+observation_period <- readr::read_csv(
+  "data/GiBleed/OBSERVATION_PERIOD.csv",
+  show_col_types = FALSE
+) %>%
+  rename_with(tolower)
+
+measurement <- readr::read_csv(
+  "data/GiBleed/MEASUREMENT.csv",
+  show_col_types = FALSE
+) %>%
+  rename_with(tolower)
+
+concept <- readr::read_csv(
+  "data/GiBleed/CONCEPT.csv",
+  show_col_types = FALSE
+) %>%
+  rename_with(tolower)
+
+concept_ancestor <- readr::read_csv(
+  "data/GiBleed/CONCEPT_ANCESTOR.csv",
+  show_col_types = FALSE
+) %>%
+  rename_with(tolower)
+```
+```{r}
+# ============================================================
+# CHECK FULL POPULATION
+# ============================================================
+
+cat("\n========================================\n")
+cat("V2 FULL GIBLEED POPULATION\n")
+cat("========================================\n\n")
+
+cat(
+  "Total persons:",
+  n_distinct(person$person_id),
+  "\n"
+)
+
+cat(
+  "Rows in PERSON:",
+  nrow(person),
+  "\n"
+)
+```
+```{r}
+# ============================================================
+# V2: IDENTIFY GI BLEEDING OUTCOME
+# ============================================================
+
+cat("\n========================================\n")
+cat("CONDITION OCCURRENCE SUMMARY\n")
+cat("========================================\n\n")
+
+condition_summary <- condition_occurrence %>%
+  count(condition_concept_id, sort = TRUE)
+
+print(condition_summary, n = 30)
+
+# ============================================================
+# LINK CONDITION CONCEPTS TO CONCEPT NAMES
+# ============================================================
+
+condition_concepts <- condition_occurrence %>%
+  count(condition_concept_id, name = "patients") %>%
+  left_join(
+    concept %>%
+      select(
+        concept_id,
+        concept_name,
+        domain_id,
+        vocabulary_id,
+        concept_class_id,
+        standard_concept
+      ),
+    by = c("condition_concept_id" = "concept_id")
+  ) %>%
+  arrange(desc(patients))
+
+print(condition_concepts, n = 50)
+```
+```{r}
+# ============================================================
+# V2: GI BLEEDING OUTCOME
+# Concept 192671 = Gastrointestinal hemorrhage
+# ============================================================
+
+gi_bleed_concept_id <- 192671
+
+gi_bleed_events <- condition_occurrence %>%
+  filter(
+    condition_concept_id == gi_bleed_concept_id
+  )
+
+cat("\n========================================\n")
+cat("GI BLEEDING OUTCOME\n")
+cat("========================================\n\n")
+
+cat(
+  "Total GI bleeding records:",
+  nrow(gi_bleed_events),
+  "\n"
+)
+
+cat(
+  "Unique patients with GI bleeding:",
+  n_distinct(gi_bleed_events$person_id),
+  "\n"
+)
+
+cat(
+  "Total population:",
+  n_distinct(person$person_id),
+  "\n"
+)
+```
+```{r}
+# ============================================================
+# GI BLEEDING PATIENT DISTRIBUTION
+# ============================================================
+
+gi_bleed_patient_summary <- gi_bleed_events %>%
+  group_by(person_id) %>%
+  summarise(
+    gi_bleed_events = n(),
+    first_gi_bleed_date = min(condition_start_date),
+    last_gi_bleed_date = max(condition_start_date),
+    .groups = "drop"
+  )
+
+print(gi_bleed_patient_summary)
+
+cat(
+  "\nPatients with multiple GI bleeding records:",
+  sum(gi_bleed_patient_summary$gi_bleed_events > 1),
+  "\n"
+)
+```
+```{r}
+# ============================================================
+# GI BLEEDING PREVALENCE
+# ============================================================
+
+total_patients <- n_distinct(person$person_id)
+
+gi_bleed_patients <- n_distinct(
+  gi_bleed_events$person_id
+)
+
+gi_bleed_prevalence <- gi_bleed_patients / total_patients
+
+cat("\n========================================\n")
+cat("GI BLEEDING PREVALENCE\n")
+cat("========================================\n\n")
+
+cat("Total patients:", total_patients, "\n")
+cat("GI bleeding patients:", gi_bleed_patients, "\n")
+cat(
+  "No GI bleeding patients:",
+  total_patients - gi_bleed_patients,
+  "\n"
+)
+cat(
+  "GI bleeding prevalence:",
+  round(gi_bleed_prevalence, 4),
+  "\n"
+)
+cat(
+  "GI bleeding prevalence (%):",
+  round(gi_bleed_prevalence * 100, 2),
+  "%\n"
+)
+```
+```{r}
+# ============================================================
+# V2: INSPECT OBSERVATION PERIODS
+# ============================================================
+
+cat("\n========================================\n")
+cat("V2 OBSERVATION PERIOD ANALYSIS\n")
+cat("========================================\n\n")
+
+observation_summary <- observation_period %>%
+  summarise(
+    patients = n_distinct(person_id),
+    observation_records = n(),
+    earliest_start = min(observation_period_start_date, na.rm = TRUE),
+    latest_start = max(observation_period_start_date, na.rm = TRUE),
+    earliest_end = min(observation_period_end_date, na.rm = TRUE),
+    latest_end = max(observation_period_end_date, na.rm = TRUE)
+  )
+
+print(observation_summary)
+```
+```{r}
+# ============================================================
+# OBSERVATION PERIOD LENGTH
+# ============================================================
+
+observation_lengths <- observation_period %>%
+  mutate(
+    observation_days =
+      as.numeric(
+        observation_period_end_date -
+        observation_period_start_date
+      ),
+    observation_years = observation_days / 365.25
+  )
+
+summary(observation_lengths$observation_days)
+
+cat("\nObservation period years:\n")
+summary(observation_lengths$observation_years)
+
+# ============================================================
+# CHECK GI BLEEDING DATES
+# ============================================================
+
+gi_bleed_dates <- gi_bleed_events %>%
+  summarise(
+    earliest_gi_bleed = min(condition_start_date, na.rm = TRUE),
+    latest_gi_bleed = max(condition_start_date, na.rm = TRUE)
+  )
+
+print(gi_bleed_dates)
+
+# ============================================================
+# GI BLEEDING EVENTS WITH OBSERVATION PERIOD
+# ============================================================
+
+gi_bleed_timing <- gi_bleed_events %>%
+  select(
+    person_id,
+    condition_start_date
+  ) %>%
+  left_join(
+    observation_period %>%
+      select(
+        person_id,
+        observation_period_start_date,
+        observation_period_end_date
+      ),
+    by = "person_id"
+  ) %>%
+  mutate(
+    within_observation_period =
+      condition_start_date >= observation_period_start_date &
+      condition_start_date <= observation_period_end_date
+  )
+
+cat(
+  "\nGI bleeding records within observation period:\n"
+)
+
+print(
+  table(
+    gi_bleed_timing$within_observation_period,
+    useNA = "ifany"
+  )
+)
+```
+```{r}
+# ============================================================
+# CREATE FULL PATIENT-LEVEL OUTCOME
+# ============================================================
+
+gi_bleed_patient_ids <- condition_occurrence %>%
+  filter(
+    condition_concept_id == 192671
+  ) %>%
+  distinct(person_id) %>%
+  mutate(outcome = 1)
+
+v2_population <- person %>%
+  select(person_id) %>%
+  left_join(
+    gi_bleed_patient_ids,
+    by = "person_id"
+  ) %>%
+  mutate(
+    outcome = ifelse(
+      is.na(outcome),
+      0,
+      outcome
+    )
+  )
+
+# ============================================================
+# VALIDATE OUTCOME
+# ============================================================
+
+cat("\n========================================\n")
+cat("V2 PATIENT-LEVEL OUTCOME\n")
+cat("========================================\n\n")
+
+cat(
+  "Total patients:",
+  nrow(v2_population),
+  "\n"
+)
+
+cat("\nOutcome distribution:\n")
+print(table(v2_population$outcome))
+
+cat("\nOutcome proportions:\n")
+print(prop.table(table(v2_population$outcome)))
+
+cat(
+  "\nGI bleeding patients:",
+  sum(v2_population$outcome == 1),
+  "\n"
+)
+
+cat(
+  "No GI bleeding patients:",
+  sum(v2_population$outcome == 0),
+  "\n"
+)
+```
+```{r}
+# ============================================================
+# V2: CHECK PERSON BIRTH INFORMATION
+# ============================================================
+
+person %>%
+  summarise(
+    minimum_birth_year = min(year_of_birth, na.rm = TRUE),
+    maximum_birth_year = max(year_of_birth, na.rm = TRUE),
+    mean_birth_year = mean(year_of_birth, na.rm = TRUE)
+  )
+```
+```{r}
+# ============================================================
+# CHECK AVAILABLE DATE RANGES
+# ============================================================
+
+cat("\nDrug exposure dates:\n")
+
+print(
+  drug_exposure %>%
+    summarise(
+      earliest = min(drug_exposure_start_date, na.rm = TRUE),
+      latest = max(drug_exposure_start_date, na.rm = TRUE)
+    )
+)
+
+cat("\nCondition dates:\n")
+
+print(
+  condition_occurrence %>%
+    summarise(
+      earliest = min(condition_start_date, na.rm = TRUE),
+      latest = max(condition_start_date, na.rm = TRUE)
+    )
+)
+
+cat("\nMeasurement dates:\n")
+
+print(
+  measurement %>%
+    summarise(
+      earliest = min(measurement_date, na.rm = TRUE),
+      latest = max(measurement_date, na.rm = TRUE)
+    )
+)
+```
+```{r}
+# ============================================================
+# V2: CALCULATE AGE AT DATASET END
+# ============================================================
+
+v2_reference_date <- as.Date("2019-07-01")
+
+v2_demographics <- person %>%
+  select(
+    person_id,
+    gender_concept_id,
+    year_of_birth,
+    race_concept_id
+  ) %>%
+  mutate(
+
+    # Sex
+    sex = case_when(
+      gender_concept_id == 8532 ~ "MALE",
+      gender_concept_id == 8507 ~ "FEMALE",
+      TRUE ~ "UNKNOWN"
+    ),
+
+    # Race
+    race = case_when(
+      race_concept_id == 8527 ~ "White",
+      race_concept_id == 8516 ~ "Black or African American",
+      race_concept_id == 8515 ~ "Asian",
+      race_concept_id == 0    ~ "Unknown",
+      TRUE ~ "Other"
+    ),
+
+    # Age at end of available dataset
+    age = as.numeric(
+      format(v2_reference_date, "%Y")
+    ) - year_of_birth
+  ) %>%
+  select(
+    person_id,
+    sex,
+    age,
+    race
+  )
+
+# ============================================================
+# VALIDATION
+# ============================================================
+
+cat("\n========================================\n")
+cat("V2 DEMOGRAPHIC FEATURES\n")
+cat("========================================\n\n")
+
+cat(
+  "Reference date:",
+  format(v2_reference_date, "%Y-%m-%d"),
+  "\n"
+)
+cat("Rows:", nrow(v2_demographics), "\n")
+cat("Unique patients:", n_distinct(v2_demographics$person_id), "\n\n")
+
+cat("Sex distribution:\n")
+print(table(v2_demographics$sex))
+
+cat("\nRace distribution:\n")
+print(table(v2_demographics$race))
+
+cat("\nAge summary:\n")
+print(summary(v2_demographics$age))
+
+cat("\nMissing values:\n")
+print(colSums(is.na(v2_demographics)))
+```
+
+```{r}
+# ============================================================
+# V2: MEDICATION FEATURES
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Medication lookup
+# ------------------------------------------------------------
+
+drug_lookup <- tibble::tribble(
+  ~feature_name,       ~concept_id, ~description,
+  "prior_aspirin",      19059056,   "Prior Aspirin Use",
+  "prior_naproxen",     1115171,    "Prior Naproxen Use",
+  "prior_celecoxib",    1118084,    "Prior Celecoxib Use"
+)
+
+
+# ------------------------------------------------------------
+# 2. Extract relevant drug exposures
+# ------------------------------------------------------------
+
+v2_drug_exposures <- drug_exposure %>%
+  filter(
+    drug_concept_id %in% drug_lookup$concept_id,
+    drug_exposure_start_date <= v2_reference_date
+  ) %>%
+  left_join(
+    drug_lookup,
+    by = c("drug_concept_id" = "concept_id")
+  ) %>%
+  distinct(
+    person_id,
+    feature_name
+  )
+
+
+# ------------------------------------------------------------
+# 3. Convert to patient-level binary variables
+# ------------------------------------------------------------
+
+v2_medications_wide <- v2_drug_exposures %>%
+  mutate(value = 1L) %>%
+  tidyr::pivot_wider(
+    names_from = feature_name,
+    values_from = value,
+    values_fill = 0L
+  )
+
+
+# ------------------------------------------------------------
+# 4. Start with ALL 2,694 patients
+# ------------------------------------------------------------
+
+v2_medications <- person %>%
+  select(person_id) %>%
+  left_join(
+    v2_medications_wide,
+    by = "person_id"
+  )
+
+
+# ------------------------------------------------------------
+# 5. Guarantee that every medication variable exists
+# ------------------------------------------------------------
+
+medication_features <- c(
+  "prior_aspirin",
+  "prior_naproxen",
+  "prior_celecoxib"
+)
+
+for (feature in medication_features) {
+
+  if (!feature %in% names(v2_medications)) {
+    v2_medications[[feature]] <- 0L
+  }
+
+}
+
+
+# ------------------------------------------------------------
+# 6. Replace missing values with zero
+# ------------------------------------------------------------
+
+v2_medications <- v2_medications %>%
+  mutate(
+    across(
+      all_of(medication_features),
+      ~ tidyr::replace_na(.x, 0L)
+    )
+  )
+
+
+# ============================================================
+# 7. VALIDATION
+# ============================================================
+
+cat("\n========================================\n")
+cat("V2 MEDICATION FEATURES\n")
+cat("========================================\n\n")
+
+cat(
+  "Rows:",
+  nrow(v2_medications),
+  "\n"
+)
+
+cat(
+  "Unique patients:",
+  dplyr::n_distinct(v2_medications$person_id),
+  "\n"
+)
+
+
+# ------------------------------------------------------------
+# Medication counts
+# ------------------------------------------------------------
+
+cat("\nMedication exposure counts:\n")
+
+medication_counts <- v2_medications %>%
+  summarise(
+    across(
+      all_of(medication_features),
+      ~ sum(.x, na.rm = TRUE)
+    )
+  )
+
+print(medication_counts)
+
+
+# ------------------------------------------------------------
+# Medication proportions
+# ------------------------------------------------------------
+
+cat("\nMedication exposure proportions:\n")
+
+medication_proportions <- v2_medications %>%
+  summarise(
+    across(
+      all_of(medication_features),
+      ~ mean(.x, na.rm = TRUE)
+    )
+  )
+
+print(medication_proportions)
+
+
+# ------------------------------------------------------------
+# Missing values
+# ------------------------------------------------------------
+
+cat("\nMissing values:\n")
+
+print(
+  colSums(
+    is.na(v2_medications)
+  )
+)
+
+
+# ------------------------------------------------------------
+# Structure
+# ------------------------------------------------------------
+
+cat("\nStructure:\n")
+
+str(v2_medications)
+```
+
+
+
+```{r}
+
+# ============================================================
+# V2: GI BLEEDING EVENT ANALYSIS
+# ============================================================
+
+gi_bleed_events <- condition_occurrence %>%
+  filter(
+    condition_concept_id == 192671
+  ) %>%
+  select(
+    person_id,
+    condition_start_date,
+    condition_end_date
+  ) %>%
+  arrange(
+    person_id,
+    condition_start_date
+  )
+
+
+# ============================================================
+# VALIDATE GI BLEEDING EVENTS
+# ============================================================
+
+cat("\n========================================\n")
+cat("V2 GI BLEEDING EVENTS\n")
+cat("========================================\n\n")
+
+cat(
+  "Total GI bleeding records:",
+  nrow(gi_bleed_events),
+  "\n"
+)
+
+cat(
+  "Unique GI bleeding patients:",
+  n_distinct(gi_bleed_events$person_id),
+  "\n"
+)
+
+cat("\nGI bleeding date range:\n")
+
+print(
+  gi_bleed_events %>%
+    summarise(
+      earliest = min(
+        condition_start_date,
+        na.rm = TRUE
+      ),
+      latest = max(
+        condition_start_date,
+        na.rm = TRUE
+      )
+    )
+)
+
+
+# ============================================================
+# NUMBER OF GI BLEEDING EVENTS PER PATIENT
+# ============================================================
+
+gi_bleed_event_counts <- gi_bleed_events %>%
+  group_by(person_id) %>%
+  summarise(
+    gi_bleed_events = n(),
+    .groups = "drop"
+  )
+
+
+cat("\nGI bleeding events per patient:\n")
+
+print(
+  summary(
+    gi_bleed_event_counts$gi_bleed_events
+  )
+)
+
+
+# ============================================================
+# PATIENTS WITH MULTIPLE GI BLEEDING EVENTS
+# ============================================================
+
+multiple_gi_bleed <- gi_bleed_event_counts %>%
+  filter(
+    gi_bleed_events > 1
+  )
+
+
+cat(
+  "\nPatients with multiple GI bleeding events:",
+  nrow(multiple_gi_bleed),
+  "\n"
+)
+
+
+# ============================================================
+# EVENT COUNT DISTRIBUTION
+# ============================================================
+
+cat("\nGI bleeding event count distribution:\n")
+
+print(
+  table(
+    gi_bleed_event_counts$gi_bleed_events
+  )
+)
+
+```
+
+
+```{r}
+# ============================================================
+# V2: MEASUREMENT FEATURE EXPLORATION
+# ============================================================
+
+cat("\n========================================\n")
+cat("V2 MEASUREMENT FEATURES\n")
+cat("========================================\n\n")
+
+
+# ------------------------------------------------------------
+# 1. Number of measurement records
+# ------------------------------------------------------------
+
+cat(
+  "Total measurement records:",
+  nrow(measurement),
+  "\n"
+)
+
+cat(
+  "Unique patients with measurements:",
+  n_distinct(measurement$person_id),
+  "\n"
+)
+
+
+# ------------------------------------------------------------
+# 2. Most common measurement concepts
+# ------------------------------------------------------------
+
+measurement_summary <- measurement %>%
+  count(
+    measurement_concept_id,
+    sort = TRUE
+  ) %>%
+  left_join(
+    concept %>%
+      select(
+        concept_id,
+        concept_name
+      ),
+    by = c(
+      "measurement_concept_id" = "concept_id"
+    )
+  ) %>%
+  select(
+    measurement_concept_id,
+    concept_name,
+    n
+  )
+
+cat("\nTop measurement concepts:\n\n")
+
+print(
+  measurement_summary %>%
+    slice_head(n = 30)
+)
+
+
+# ------------------------------------------------------------
+# 3. Patient coverage
+# ------------------------------------------------------------
+
+measurement_patient_coverage <- measurement %>%
+  group_by(
+    measurement_concept_id
+  ) %>%
+  summarise(
+    patients = n_distinct(person_id),
+    records = n(),
+    .groups = "drop"
+  ) %>%
+  left_join(
+    concept %>%
+      select(
+        concept_id,
+        concept_name
+      ),
+    by = c(
+      "measurement_concept_id" = "concept_id"
+    )
+  ) %>%
+  arrange(
+    desc(patients)
+  )
+
+cat("\nMeasurement patient coverage:\n\n")
+
+print(
+  measurement_patient_coverage %>%
+    slice_head(n = 30)
+)
+```
+```{r}
+# ============================================================
+# V2: CLINICAL CONDITION FEATURE EXPLORATION
+# ============================================================
+
+cat("\n========================================\n")
+cat("V2 CLINICAL CONDITION FEATURES\n")
+cat("========================================\n\n")
+
+
+# ------------------------------------------------------------
+# 1. Top condition concepts
+# ------------------------------------------------------------
+
+condition_summary <- condition_occurrence %>%
+  count(
+    condition_concept_id,
+    sort = TRUE
+  ) %>%
+  left_join(
+    concept %>%
+      select(
+        concept_id,
+        concept_name
+      ),
+    by = c(
+      "condition_concept_id" = "concept_id"
+    )
+  ) %>%
+  select(
+    condition_concept_id,
+    concept_name,
+    n
+  )
+
+
+cat("Top 50 condition concepts:\n\n")
+
+print(
+  condition_summary %>%
+    slice_head(n = 50)
+)
+
+
+# ------------------------------------------------------------
+# 2. Search for clinically relevant GI conditions
+# ------------------------------------------------------------
+
+gi_condition_candidates <- condition_summary %>%
+  filter(
+    grepl(
+      paste(
+        c(
+          "ulcer",
+          "gastro",
+          "intestinal",
+          "esoph",
+          "colitis",
+          "divert",
+          "gastric",
+          "duoden",
+          "hemorr",
+          "bleed"
+        ),
+        collapse = "|"
+      ),
+      concept_name,
+      ignore.case = TRUE
+    )
+  )
+
+
+cat("\n========================================\n")
+cat("POTENTIAL GI-RELATED CONDITIONS\n")
+cat("========================================\n\n")
+
+print(
+  gi_condition_candidates
+)
+```
+```{r}
+# ============================================================
+# V2: CLINICAL CONDITION FEATURES
+# ============================================================
+
+condition_lookup <- tibble::tribble(
+  ~feature_name,              ~concept_id, ~description,
+  "prior_peptic_ulcer",        4027663,   "Prior Peptic Ulcer",
+  "prior_ulcerative_colitis",    81893,   "Prior Ulcerative Colitis",
+  "prior_esophagitis",           30753,   "Prior Esophagitis",
+  "prior_diverticular_disease", 4266809,  "Prior Diverticular Disease"
+)
+
+
+# ============================================================
+# EXTRACT RELEVANT CONDITIONS
+# ============================================================
+
+v2_condition_features <- condition_occurrence %>%
+  filter(
+    condition_concept_id %in% condition_lookup$concept_id
+  ) %>%
+  left_join(
+    condition_lookup,
+    by = c(
+      "condition_concept_id" = "concept_id"
+    )
+  ) %>%
+  distinct(
+    person_id,
+    feature_name
+  ) %>%
+  mutate(
+    value = 1L
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = feature_name,
+    values_from = value,
+    values_fill = 0L
+  )
+
+
+# ============================================================
+# RETAIN ALL 2,694 PATIENTS
+# ============================================================
+
+v2_conditions <- person %>%
+  select(person_id) %>%
+  left_join(
+    v2_condition_features,
+    by = "person_id"
+  )
+
+
+# ============================================================
+# GUARANTEE ALL FOUR FEATURES EXIST
+# ============================================================
+
+condition_features <- c(
+  "prior_peptic_ulcer",
+  "prior_ulcerative_colitis",
+  "prior_esophagitis",
+  "prior_diverticular_disease"
+)
+
+for (feature in condition_features) {
+
+  if (!feature %in% names(v2_conditions)) {
+    v2_conditions[[feature]] <- 0L
+  }
+
+}
+
+
+# ============================================================
+# REPLACE MISSING VALUES WITH ZERO
+# ============================================================
+
+v2_conditions <- v2_conditions %>%
+  mutate(
+    across(
+      all_of(condition_features),
+      ~ tidyr::replace_na(.x, 0L)
+    )
+  )
+
+
+# ============================================================
+# VALIDATION
+# ============================================================
+
+cat("\n========================================\n")
+cat("V2 CLINICAL CONDITION FEATURES\n")
+cat("========================================\n\n")
+
+cat(
+  "Rows:",
+  nrow(v2_conditions),
+  "\n"
+)
+
+cat(
+  "Unique patients:",
+  dplyr::n_distinct(v2_conditions$person_id),
+  "\n"
+)
+
+
+# ============================================================
+# CONDITION COUNTS
+# ============================================================
+
+cat("\nCondition counts:\n")
+
+condition_counts <- v2_conditions %>%
+  summarise(
+    across(
+      all_of(condition_features),
+      ~ sum(.x, na.rm = TRUE)
+    )
+  )
+
+print(condition_counts)
+
+
+# ============================================================
+# CONDITION PROPORTIONS
+# ============================================================
+
+cat("\nCondition proportions:\n")
+
+condition_proportions <- v2_conditions %>%
+  summarise(
+    across(
+      all_of(condition_features),
+      ~ mean(.x, na.rm = TRUE)
+    )
+  )
+
+print(condition_proportions)
+
+
+# ============================================================
+# MISSING VALUES
+# ============================================================
+
+cat("\nMissing values:\n")
+
+print(
+  colSums(
+    is.na(v2_conditions)
+  )
+)
+
+
+# ============================================================
+# STRUCTURE
+# ============================================================
+
+cat("\nStructure:\n")
+
+str(v2_conditions)
+```
+```{r}
+# ============================================================
+# V2: ASSEMBLE FINAL MODELLING DATASET
+# ============================================================
+
+v2_model_data <- v2_demographics %>%
+  left_join(
+    v2_medications,
+    by = "person_id"
+  ) %>%
+  left_join(
+    v2_conditions,
+    by = "person_id"
+  ) %>%
+  left_join(
+    v2_population,
+    by = "person_id"
+  ) %>%
+  select(
+    person_id,
+    sex,
+    age,
+    race,
+    prior_aspirin,
+    prior_naproxen,
+    prior_celecoxib,
+    prior_peptic_ulcer,
+    prior_ulcerative_colitis,
+    prior_esophagitis,
+    prior_diverticular_disease,
+    outcome
+  )
+
+
+# ============================================================
+# VALIDATION
+# ============================================================
+
+cat("\n========================================\n")
+cat("V2 FINAL MODELLING DATASET\n")
+cat("========================================\n\n")
+
+cat("Rows:", nrow(v2_model_data), "\n")
+
+cat(
+  "Unique patients:",
+  dplyr::n_distinct(v2_model_data$person_id),
+  "\n"
+)
+
+cat(
+  "Variables:",
+  ncol(v2_model_data),
+  "\n\n"
+)
+
+cat("Outcome distribution:\n")
+print(table(v2_model_data$outcome))
+
+cat("\nOutcome proportions:\n")
+print(prop.table(table(v2_model_data$outcome)))
+
+cat("\nMissing values:\n")
+print(colSums(is.na(v2_model_data)))
+
+cat("\nDuplicate patient IDs:\n")
+
+duplicate_patients <- v2_model_data %>%
+  count(person_id) %>%
+  filter(n > 1)
+
+print(nrow(duplicate_patients))
+
+cat("\nStructure:\n")
+str(v2_model_data)
+```
+```{r}
+# ============================================================
+# V2: STRATIFIED TRAIN / TEST SPLIT
+# ============================================================
+
+
+set.seed(2026)
+
+# ------------------------------------------------------------
+# 1. Prepare outcome as a classification factor
+# ------------------------------------------------------------
+
+v2_model_data <- v2_model_data %>%
+  mutate(
+    sex = factor(sex),
+    race = factor(race),
+    outcome = factor(
+      outcome,
+      levels = c(0, 1),
+      labels = c("No", "Yes")
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 2. Create stratified 80/20 split
+# ------------------------------------------------------------
+
+train_index <- createDataPartition(
+  v2_model_data$outcome,
+  p = 0.80,
+  list = FALSE
+)
+
+train_model <- v2_model_data[train_index, ]
+
+test_model <- v2_model_data[-train_index, ]
+
+
+# ------------------------------------------------------------
+# 3. Remove patient ID from modelling data
+# ------------------------------------------------------------
+
+train_model <- train_model %>%
+  select(-person_id)
+
+test_model <- test_model %>%
+  select(-person_id)
+
+
+# ------------------------------------------------------------
+# 4. Validate split
+# ------------------------------------------------------------
+
+cat("\n========================================\n")
+cat("V2 TRAIN / TEST SPLIT\n")
+cat("========================================\n\n")
+
+cat(
+  "Training patients:",
+  nrow(train_model),
+  "\n"
+)
+
+cat(
+  "Testing patients:",
+  nrow(test_model),
+  "\n"
+)
+
+cat(
+  "Total patients:",
+  nrow(train_model) + nrow(test_model),
+  "\n"
+)
+
+
+# ------------------------------------------------------------
+# 5. Training outcome distribution
+# ------------------------------------------------------------
+
+cat("\nTraining outcome:\n")
+
+print(
+  table(train_model$outcome)
+)
+
+cat("\nTraining outcome proportions:\n")
+
+print(
+  prop.table(
+    table(train_model$outcome)
+  )
+)
+
+
+# ------------------------------------------------------------
+# 6. Testing outcome distribution
+# ------------------------------------------------------------
+
+cat("\nTesting outcome:\n")
+
+print(
+  table(test_model$outcome)
+)
+
+cat("\nTesting outcome proportions:\n")
+
+print(
+  prop.table(
+    table(test_model$outcome)
+  )
+)
+
+
+# ------------------------------------------------------------
+# 7. Check structure
+# ------------------------------------------------------------
+
+cat("\nTraining structure:\n")
+
+str(train_model)
+
+cat("\nTesting structure:\n")
+
+str(test_model)
+```
+
+```{r}
+# ============================================================
+# PREPARE OUTCOME
+# ============================================================
+
+train_model <- train_model %>%
+  mutate(
+    outcome = factor(
+      outcome,
+      levels = c("Yes", "No")
+    )
+  )
+
+test_model <- test_model %>%
+  mutate(
+    outcome = factor(
+      outcome,
+      levels = c("Yes", "No")
+    )
+  )
+
+# Check
+table(train_model$outcome)
+table(test_model$outcome)
+```
+```{r}
+# ============================================================
+# CUSTOM CV SUMMARY FUNCTION
+# ============================================================
+
+pr_auc_summary <- function(data, lev = NULL, model = NULL) {
+
+  # Positive class = Yes
+  actual <- ifelse(
+    data$obs == "Yes",
+    1,
+    0
+  )
+
+  probability <- data$Yes
+
+  # AUROC
+  roc_value <- tryCatch(
+    {
+      as.numeric(
+        pROC::auc(
+          pROC::roc(
+            actual,
+            probability,
+            quiet = TRUE,
+            direction = "<"
+          )
+        )
+      )
+    },
+    error = function(e) NA_real_
+  )
+
+  # AUPRC
+  pr_value <- tryCatch(
+    {
+      PRROC::pr.curve(
+        scores.class0 = probability[actual == 1],
+        scores.class1 = probability[actual == 0],
+        curve = FALSE
+      )$auc.integral
+    },
+    error = function(e) NA_real_
+  )
+
+  c(
+    AUROC = roc_value,
+    AUPRC = pr_value
+  )
+}
+```
+```{r}
+# ============================================================
+# 5-FOLD CROSS-VALIDATION
+# ============================================================
+
+cv_control <- trainControl(
+  method = "cv",
+  number = 5,
+  classProbs = TRUE,
+  summaryFunction = pr_auc_summary,
+  savePredictions = "final",
+  verboseIter = TRUE,
+  allowParallel = TRUE
+)
+```
+```{r}
+# ============================================================
+# MODEL FORMULA
+# ============================================================
+
+model_formula <- outcome ~
+  sex +
+  age +
+  race +
+  prior_aspirin +
+  prior_naproxen +
+  prior_celecoxib +
+  prior_peptic_ulcer +
+  prior_ulcerative_colitis +
+  prior_esophagitis +
+  prior_diverticular_disease
+```
+```{r}
+# ============================================================
+# 1. LOGISTIC REGRESSION
+# ============================================================
+
+set.seed(2026)
+
+logistic_v2 <- train(
+  model_formula,
+  data = train_model,
+  method = "glm",
+  family = binomial(),
+  metric = "AUPRC",
+  trControl = cv_control
+)
+
+print(logistic_v2)
+```
+```{r}
+# ============================================================
+# 2. ELASTIC NET
+# ============================================================
+
+elastic_grid <- expand.grid(
+  alpha = c(0, 0.25, 0.5, 0.75, 1),
+  lambda = c(
+    0.0001,
+    0.001,
+    0.01,
+    0.1
+  )
+)
+
+set.seed(2026)
+
+elastic_net_v2 <- train(
+  model_formula,
+  data = train_model,
+  method = "glmnet",
+  metric = "AUPRC",
+  trControl = cv_control,
+  tuneGrid = elastic_grid,
+  preProcess = c(
+    "center",
+    "scale"
+  )
+)
+
+print(elastic_net_v2)
+```
+```{r}
+# ============================================================
+# 3. RANDOM FOREST
+# ============================================================
+
+rf_grid <- expand.grid(
+  mtry = c(
+    2,
+    3,
+    4,
+    5,
+    6
+  )
+)
+
+set.seed(2026)
+
+random_forest_v2 <- train(
+  model_formula,
+  data = train_model,
+  method = "rf",
+  metric = "AUPRC",
+  trControl = cv_control,
+  tuneGrid = rf_grid,
+  ntree = 500,
+  importance = TRUE
+)
+
+print(random_forest_v2)
+```
+```{r}
+cv_control <- trainControl(
+  method = "cv",
+  number = 5,
+  classProbs = TRUE,
+  summaryFunction = pr_auc_summary,
+  savePredictions = "final",
+  verboseIter = TRUE,
+  allowParallel = TRUE
+)
+```
+```{r}
+
+# ============================================================
+# 4. GBM
+# ============================================================
+
+gbm_grid <- expand.grid(
+  n.trees = c(100, 200),
+  interaction.depth = c(1, 2, 3),
+  shrinkage = c(0.03, 0.05),
+  n.minobsinnode = c(10)
+)
+
+set.seed(2026)
+
+gbm_v2 <- train(
+  model_formula,
+  data = train_model,
+  method = "gbm",
+  metric = "AUPRC",
+  trControl = cv_control,
+  tuneGrid = gbm_grid,
+  verbose = FALSE
+)
+
+print(gbm_v2)
+```
+```{r}
+# ============================================================
+# 5. SUPPORT VECTOR MACHINE
+# ============================================================
+
+svm_grid <- expand.grid(
+  sigma = c(
+    0.001,
+    0.005,
+    0.01,
+    0.05
+  ),
+  C = c(
+    0.25,
+    0.5,
+    1,
+    2
+  )
+)
+
+set.seed(2026)
+
+svm_v2 <- train(
+  model_formula,
+  data = train_model,
+  method = "svmRadial",
+  metric = "AUPRC",
+  trControl = cv_control,
+  tuneGrid = svm_grid,
+  preProcess = c(
+    "center",
+    "scale"
+  )
+)
+
+print(svm_v2)
+```
+```{r}
+# ============================================================
+# V2 6 XGBOOST - NATIVE R IMPLEMENTATION
+# ============================================================
+
+
+cat("XGBoost version:", as.character(packageVersion("xgboost")), "\n")
+```
+```{r}
+# ============================================================
+# PREPARE XGBOOST DATA
+# ============================================================
+
+xgb_formula <- ~
+  sex +
+  age +
+  race +
+  prior_aspirin +
+  prior_naproxen +
+  prior_celecoxib +
+  prior_peptic_ulcer +
+  prior_ulcerative_colitis +
+  prior_esophagitis +
+  prior_diverticular_disease
+
+# Create design matrix
+xgb_x <- model.matrix(
+  xgb_formula,
+  data = train_model
+)
+
+# Remove intercept
+xgb_x <- xgb_x[, colnames(xgb_x) != "(Intercept)", drop = FALSE]
+
+# Outcome: No = 0, Yes = 1
+xgb_y <- ifelse(
+  train_model$outcome == "Yes",
+  1,
+  0
+)
+
+cat("\n========================================\n")
+cat("XGBOOST INPUT DATA\n")
+cat("========================================\n\n")
+
+cat("Rows:", nrow(xgb_x), "\n")
+cat("Predictor columns:", ncol(xgb_x), "\n")
+cat("Positive cases:", sum(xgb_y == 1), "\n")
+cat("Negative cases:", sum(xgb_y == 0), "\n")
+```
+```{r}
+# ============================================================
+# STRATIFIED 5-FOLD CV
+# ============================================================
+
+set.seed(2026)
+
+xgb_folds <- caret::createFolds(
+  train_model$outcome,
+  k = 5,
+  returnTrain = FALSE
+)
+
+cat("\nFold sizes:\n")
+
+print(
+  sapply(
+    xgb_folds,
+    length
+  )
+)
+```
+```{r}
+# ============================================================
+# XGBOOST TUNING GRID
+# ============================================================
+
+xgb_grid <- expand.grid(
+  nrounds = c(100, 200),
+  max_depth = c(2, 3),
+  eta = c(0.03, 0.05),
+  gamma = 0,
+  colsample_bytree = 0.8,
+  min_child_weight = 1,
+  subsample = 0.8
+)
+
+print(xgb_grid)
+```
+```{r}
+# ============================================================
+# XGBOOST 5-FOLD CROSS-VALIDATION
+# PRIMARY METRIC = AUPRC
+# ============================================================
+
+xgb_results <- list()
+
+for (i in seq_len(nrow(xgb_grid))) {
+
+  params <- xgb_grid[i, ]
+
+  cat(
+    "\n----------------------------------------\n"
+  )
+
+  cat(
+    "XGBoost combination",
+    i,
+    "of",
+    nrow(xgb_grid),
+    "\n"
+  )
+
+  cat(
+    "nrounds =", params$nrounds,
+    "| max_depth =", params$max_depth,
+    "| eta =", params$eta,
+    "\n"
+  )
+
+  fold_auprc <- numeric(length(xgb_folds))
+  fold_auroc <- numeric(length(xgb_folds))
+
+  for (fold in seq_along(xgb_folds)) {
+
+    test_idx <- xgb_folds[[fold]]
+
+    train_idx <- setdiff(
+      seq_len(nrow(xgb_x)),
+      test_idx
+    )
+
+    dtrain <- xgb.DMatrix(
+      data = xgb_x[train_idx, , drop = FALSE],
+      label = xgb_y[train_idx]
+    )
+
+    dvalid <- xgb.DMatrix(
+      data = xgb_x[test_idx, , drop = FALSE],
+      label = xgb_y[test_idx]
+    )
+
+    xgb_params <- list(
+      objective = "binary:logistic",
+      eval_metric = "logloss",
+      max_depth = params$max_depth,
+      eta = params$eta,
+      gamma = params$gamma,
+      colsample_bytree = params$colsample_bytree,
+      min_child_weight = params$min_child_weight,
+      subsample = params$subsample,
+      nthread = 1
+    )
+
+    set.seed(
+      2026 + i + fold
+    )
+
+    xgb_fit <- xgb.train(
+      params = xgb_params,
+      data = dtrain,
+      nrounds = params$nrounds,
+      verbose = 0
+    )
+
+    predictions <- predict(
+      xgb_fit,
+      dvalid
+    )
+
+    actual <- xgb_y[test_idx]
+
+    # ----------------------------------------
+    # AUPRC
+    # ----------------------------------------
+
+    pr_result <- PRROC::pr.curve(
+      scores.class0 = predictions[actual == 1],
+      scores.class1 = predictions[actual == 0],
+      curve = FALSE
+    )
+
+    fold_auprc[fold] <- pr_result$auc.integral
+
+    # ----------------------------------------
+    # AUROC
+    # ----------------------------------------
+
+    roc_result <- pROC::roc(
+      actual,
+      predictions,
+      quiet = TRUE
+    )
+
+    fold_auroc[fold] <- as.numeric(
+      pROC::auc(roc_result)
+    )
+
+  }
+
+  xgb_results[[i]] <- data.frame(
+    nrounds = params$nrounds,
+    max_depth = params$max_depth,
+    eta = params$eta,
+    gamma = params$gamma,
+    colsample_bytree = params$colsample_bytree,
+    min_child_weight = params$min_child_weight,
+    subsample = params$subsample,
+
+    Mean_AUPRC = mean(
+      fold_auprc
+    ),
+
+    SD_AUPRC = sd(
+      fold_auprc
+    ),
+
+    Mean_AUROC = mean(
+      fold_auroc
+    ),
+
+    SD_AUROC = sd(
+      fold_auroc
+    )
+  )
+
+  cat(
+    "Mean AUPRC:",
+    round(mean(fold_auprc), 4),
+    "\n"
+  )
+
+  cat(
+    "Mean AUROC:",
+    round(mean(fold_auroc), 4),
+    "\n"
+  )
+}
+```
+```{r}
+# ============================================================
+# XGBOOST CV RESULTS
+# ============================================================
+
+xgb_cv_results <- bind_rows(
+  xgb_results
+) %>%
+  arrange(
+    desc(Mean_AUPRC)
+  )
+
+cat("\n========================================\n")
+cat("XGBOOST 5-FOLD CROSS-VALIDATION RESULTS\n")
+cat("========================================\n\n")
+
+print(
+  xgb_cv_results,
+  row.names = FALSE
+)
+```
+```{r}
+# ============================================================
+# EXTRACT BEST CV RESULTS FROM all 6 MODELS
+# ============================================================
+
+model_cv_summary <- data.frame(
+
+  Model = c(
+    "Logistic Regression",
+    "Elastic Net",
+    "Random Forest",
+    "GBM",
+    "SVM",
+    "XGBoost"
+  ),
+
+  Mean_AUROC = c(
+    max(logistic_v2$resample$AUROC, na.rm = TRUE),
+    max(elastic_net_v2$resample$AUROC, na.rm = TRUE),
+    max(random_forest_v2$resample$AUROC, na.rm = TRUE),
+    max(gbm_v2$resample$AUROC, na.rm = TRUE),
+    max(svm_v2$resample$AUROC, na.rm = TRUE),
+    xgb_cv_results$Mean_AUROC[1]
+  ),
+
+  Mean_AUPRC = c(
+    max(logistic_v2$resample$AUPRC, na.rm = TRUE),
+    max(elastic_net_v2$resample$AUPRC, na.rm = TRUE),
+    max(random_forest_v2$resample$AUPRC, na.rm = TRUE),
+    max(gbm_v2$resample$AUPRC, na.rm = TRUE),
+    max(svm_v2$resample$AUPRC, na.rm = TRUE),
+    xgb_cv_results$Mean_AUPRC[1]
+  )
+)
+
+# Rank by primary metric: AUPRC
+model_cv_summary <- model_cv_summary %>%
+  arrange(desc(Mean_AUPRC))
+
+cat("\n========================================\n")
+cat("V2 FINAL 5-FOLD MODEL COMPARISON\n")
+cat("========================================\n\n")
+
+print(
+  model_cv_summary,
+  row.names = FALSE
+)
+```
+```{r}
+# ============================================================
+# V2: FINAL CROSS-VALIDATION MODEL COMPARISON
+# PERFORMANCE AT SELECTED TUNING PARAMETERS
+# ============================================================
+
+# ------------------------------------------------------------
+# Helper function
+# Extract CV performance corresponding to bestTune
+# ------------------------------------------------------------
+
+get_best_cv <- function(model, model_name) {
+
+  best <- model$bestTune
+
+  res <- model$results
+
+  # Match the best tuning parameters
+  for (col in names(best)) {
+    res <- res[
+      res[[col]] == best[[col]],
+      ,
+      drop = FALSE
+    ]
+  }
+
+  data.frame(
+    Model = model_name,
+    Mean_AUROC = res$AUROC[1],
+    SD_AUROC = res$AUROCSD[1],
+    Mean_AUPRC = res$AUPRC[1],
+    SD_AUPRC = res$AUPRCSD[1]
+  )
+}
+
+
+# ============================================================
+# EXTRACT SELECTED MODEL PERFORMANCE
+# ============================================================
+
+logistic_cv <- get_best_cv(
+  logistic_v2,
+  "Logistic Regression"
+)
+
+elastic_cv <- get_best_cv(
+  elastic_net_v2,
+  "Elastic Net"
+)
+
+rf_cv <- get_best_cv(
+  random_forest_v2,
+  "Random Forest"
+)
+
+gbm_cv <- get_best_cv(
+  gbm_v2,
+  "GBM"
+)
+
+svm_cv <- get_best_cv(
+  svm_v2,
+  "SVM"
+)
+
+
+# ============================================================
+# XGBOOST
+# ============================================================
+
+xgb_cv <- data.frame(
+  Model = "XGBoost",
+  Mean_AUROC = xgb_cv_results$Mean_AUROC[1],
+  SD_AUROC = xgb_cv_results$SD_AUROC[1],
+  Mean_AUPRC = xgb_cv_results$Mean_AUPRC[1],
+  SD_AUPRC = xgb_cv_results$SD_AUPRC[1]
+)
+
+
+# ============================================================
+# COMBINE ALL SIX MODELS
+# ============================================================
+
+final_cv_comparison <- bind_rows(
+  logistic_cv,
+  elastic_cv,
+  rf_cv,
+  gbm_cv,
+  svm_cv,
+  xgb_cv
+) %>%
+  arrange(
+    desc(Mean_AUPRC)
+  )
+
+
+# ============================================================
+# DISPLAY FINAL CV RESULTS
+# ============================================================
+
+cat("\n========================================\n")
+cat("V2 FINAL 5-FOLD CROSS-VALIDATION RESULTS\n")
+cat("========================================\n\n")
+
+print(
+  final_cv_comparison,
+  row.names = FALSE
+)
+```
+```{r}
+# ============================================================
+# ROUNDED CV TABLE
+# ============================================================
+
+final_cv_table <- final_cv_comparison %>%
+  mutate(
+    Mean_AUROC = round(Mean_AUROC, 3),
+    SD_AUROC = round(SD_AUROC, 3),
+    Mean_AUPRC = round(Mean_AUPRC, 3),
+    SD_AUPRC = round(SD_AUPRC, 3)
+  )
+
+cat("\n========================================\n")
+cat("V2 MODEL SELECTION TABLE\n")
+cat("========================================\n\n")
+
+print(
+  final_cv_table,
+  row.names = FALSE
+)
+```
+```{r}
+# ============================================================
+# V2 FINAL XGBOOST MODEL
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Prepare training matrix
+# ------------------------------------------------------------
+
+xgb_formula <- ~
+  sex +
+  age +
+  race +
+  prior_aspirin +
+  prior_naproxen +
+  prior_celecoxib +
+  prior_peptic_ulcer +
+  prior_ulcerative_colitis +
+  prior_esophagitis +
+  prior_diverticular_disease
+
+x_train <- model.matrix(
+  xgb_formula,
+  data = train_model
+)
+
+x_train <- x_train[
+  ,
+  colnames(x_train) != "(Intercept)",
+  drop = FALSE
+]
+
+y_train <- ifelse(
+  train_model$outcome == "Yes",
+  1,
+  0
+)
+
+
+# ------------------------------------------------------------
+# 2. Prepare untouched test matrix
+# ------------------------------------------------------------
+
+x_test <- model.matrix(
+  xgb_formula,
+  data = test_model
+)
+
+x_test <- x_test[
+  ,
+  colnames(x_test) != "(Intercept)",
+  drop = FALSE
+]
+
+y_test <- ifelse(
+  test_model$outcome == "Yes",
+  1,
+  0
+)
+
+
+# ------------------------------------------------------------
+# 3. Ensure identical predictor columns
+# ------------------------------------------------------------
+
+x_test <- x_test[
+  ,
+  colnames(x_train),
+  drop = FALSE
+]
+
+
+# ------------------------------------------------------------
+# 4. Create XGBoost matrices
+# ------------------------------------------------------------
+
+dtrain_final <- xgb.DMatrix(
+  data = x_train,
+  label = y_train
+)
+
+dtest_final <- xgb.DMatrix(
+  data = x_test,
+  label = y_test
+)
+
+
+# ------------------------------------------------------------
+# 5. Final model parameters
+# ------------------------------------------------------------
+
+final_xgb_params <- list(
+  objective = "binary:logistic",
+  eval_metric = "logloss",
+
+  max_depth = 2,
+  eta = 0.03,
+  gamma = 0,
+  colsample_bytree = 0.8,
+  min_child_weight = 1,
+  subsample = 0.8,
+
+  nthread = 1
+)
+
+
+# ------------------------------------------------------------
+# 6. Fit final model
+# ------------------------------------------------------------
+
+set.seed(2026)
+
+final_xgb_model <- xgb.train(
+  params = final_xgb_params,
+  data = dtrain_final,
+  nrounds = 200,
+  verbose = 0
+)
+
+cat("\n========================================\n")
+cat("V2 FINAL XGBOOST MODEL\n")
+cat("========================================\n\n")
+
+cat("Training patients:", nrow(train_model), "\n")
+cat("Test patients:", nrow(test_model), "\n")
+cat("Boosting rounds: 200\n")
+cat("Maximum tree depth: 2\n")
+cat("Learning rate: 0.03\n")
+```
+```{r}
+# ============================================================
+# FINAL TEST-SET PREDICTIONS
+# ============================================================
+
+test_probability <- predict(
+  final_xgb_model,
+  dtest_final
+)
+
+test_prediction <- ifelse(
+  test_probability >= 0.5,
+  1,
+  0
+)
+
+cat("\n========================================\n")
+cat("FINAL TEST PREDICTIONS\n")
+cat("========================================\n\n")
+
+cat(
+  "Number of predictions:",
+  length(test_probability),
+  "\n"
+)
+
+cat(
+  "Observed GI bleeding cases:",
+  sum(y_test == 1),
+  "\n"
+)
+
+cat(
+  "Observed non-GI bleeding cases:",
+  sum(y_test == 0),
+  "\n"
+)
+```
+```{r}
+# ============================================================
+# FINAL AUROC
+# ============================================================
+
+roc_final <- pROC::roc(
+  response = y_test,
+  predictor = test_probability,
+  quiet = TRUE
+)
+
+final_auroc <- as.numeric(
+  pROC::auc(roc_final)
+)
+
+auroc_ci <- pROC::ci.auc(
+  roc_final,
+  method = "delong"
+)
+
+cat("\n========================================\n")
+cat("FINAL TEST-SET AUROC\n")
+cat("========================================\n\n")
+
+cat(
+  "AUROC:",
+  round(final_auroc, 4),
+  "\n"
+)
+
+cat(
+  "95% CI:",
+  round(auroc_ci[1], 4),
+  "-",
+  round(auroc_ci[3], 4),
+  "\n"
+)
+```
+```{r}
+# ============================================================
+# FINAL AUPRC
+# ============================================================
+
+pr_final <- PRROC::pr.curve(
+  scores.class0 = test_probability[y_test == 1],
+  scores.class1 = test_probability[y_test == 0],
+  curve = FALSE
+)
+
+final_auprc <- pr_final$auc.integral
+
+baseline_auprc <- mean(
+  y_test == 1
+)
+
+auprc_improvement <- (
+  (final_auprc - baseline_auprc) /
+    baseline_auprc
+) * 100
+
+cat("\n========================================\n")
+cat("FINAL TEST-SET AUPRC\n")
+cat("========================================\n\n")
+
+cat(
+  "AUPRC:",
+  round(final_auprc, 4),
+  "\n"
+)
+
+cat(
+  "Baseline AUPRC:",
+  round(baseline_auprc, 4),
+  "\n"
+)
+
+cat(
+  "Improvement over baseline:",
+  round(auprc_improvement, 2),
+  "%\n"
+)
+```
+```{r}
+# ============================================================
+# FINAL CONFUSION MATRIX
+# ============================================================
+
+confusion_matrix <- table(
+  Prediction = factor(
+    test_prediction,
+    levels = c(0, 1),
+    labels = c("No", "Yes")
+  ),
+  Reference = factor(
+    y_test,
+    levels = c(0, 1),
+    labels = c("No", "Yes")
+  )
+)
+
+cat("\n========================================\n")
+cat("FINAL TEST CONFUSION MATRIX\n")
+cat("========================================\n\n")
+
+print(confusion_matrix)
+```
+```{r}
+# ============================================================
+# FINAL CLASSIFICATION METRICS
+# ============================================================
+
+TN <- confusion_matrix["No", "No"]
+FP <- confusion_matrix["Yes", "No"]
+FN <- confusion_matrix["No", "Yes"]
+TP <- confusion_matrix["Yes", "Yes"]
+
+sensitivity <- TP / (TP + FN)
+
+specificity <- TN / (TN + FP)
+
+ppv <- TP / (TP + FP)
+
+npv <- TN / (TN + FN)
+
+accuracy <- (
+  TP + TN
+) / sum(confusion_matrix)
+
+f1 <- (
+  2 * TP
+) / (
+  2 * TP + FP + FN
+)
+
+final_metrics <- data.frame(
+  Metric = c(
+    "AUROC",
+    "AUPRC",
+    "Sensitivity",
+    "Specificity",
+    "PPV",
+    "NPV",
+    "F1",
+    "Accuracy"
+  ),
+
+  Value = c(
+    final_auroc,
+    final_auprc,
+    sensitivity,
+    specificity,
+    ppv,
+    npv,
+    f1,
+    accuracy
+  )
+)
+
+cat("\n========================================\n")
+cat("V2 FINAL TEST-SET PERFORMANCE\n")
+cat("========================================\n\n")
+
+print(
+  final_metrics %>%
+    mutate(
+      Value = round(Value, 4)
+    ),
+  row.names = FALSE
+)
+
+```
+```{r}
+# ============================================================
+# V2 XGBOOST: TEST-SET PREDICTED PROBABILITY DISTRIBUTION
+# ============================================================
+
+cat("\n========================================\n")
+cat("TEST-SET PREDICTED PROBABILITY DISTRIBUTION\n")
+cat("========================================\n\n")
+
+print(
+  summary(test_probability)
+)
+
+cat("\nProbability quantiles:\n")
+
+print(
+  quantile(
+    test_probability,
+    probs = c(
+      0,
+      0.01,
+      0.05,
+      0.10,
+      0.25,
+      0.50,
+      0.75,
+      0.90,
+      0.95,
+      0.99,
+      1
+    ),
+    na.rm = TRUE
+  )
+)
+
+cat("\nPredictions >= 0.50:\n")
+
+print(
+  sum(test_probability >= 0.50)
+)
+
+cat("\nPredictions < 0.50:\n")
+
+print(
+  sum(test_probability < 0.50)
+)
+```
+```{r}
+# ============================================================
+# ACTUAL OUTCOME VS PREDICTED PROBABILITY
+# ============================================================
+
+probability_by_outcome <- data.frame(
+  Actual = factor(
+    y_test,
+    levels = c(0, 1),
+    labels = c("No GI Bleeding", "GI Bleeding")
+  ),
+  Predicted_Probability = test_probability
+)
+
+cat("\n========================================\n")
+cat("PREDICTED PROBABILITY BY ACTUAL OUTCOME\n")
+cat("========================================\n\n")
+
+probability_summary <- probability_by_outcome %>%
+  group_by(Actual) %>%
+  summarise(
+    Patients = n(),
+    Mean = mean(Predicted_Probability),
+    Median = median(Predicted_Probability),
+    Minimum = min(Predicted_Probability),
+    Q1 = quantile(
+      Predicted_Probability,
+      0.25
+    ),
+    Q3 = quantile(
+      Predicted_Probability,
+      0.75
+    ),
+    Maximum = max(Predicted_Probability),
+    .groups = "drop"
+  )
+
+print(
+  probability_summary
+)
+```
+```{r}
+# ============================================================
+# TOP 20 HIGHEST PREDICTED RISKS
+# ============================================================
+
+top_20_risk <- data.frame(
+  Actual = ifelse(
+    y_test == 1,
+    "GI Bleeding",
+    "No GI Bleeding"
+  ),
+  Predicted_Probability = test_probability
+) %>%
+  arrange(
+    desc(Predicted_Probability)
+  ) %>%
+  slice_head(n = 20)
+
+cat("\n========================================\n")
+cat("TOP 20 HIGHEST PREDICTED RISKS\n")
+cat("========================================\n\n")
+
+print(
+  top_20_risk,
+  row.names = FALSE
+)
+```
+```{r}
+# ============================================================
+# V2 FINAL XGBOOST CLASSIFICATION THRESHOLD
+# ============================================================
+
+final_threshold <- 0.205
+
+cat(
+  "Final XGBoost classification threshold:",
+  final_threshold,
+  "\n"
+)
+```
+```{r}
+# ============================================================
+# APPLY FINAL THRESHOLD
+# ============================================================
+
+test_prediction <- ifelse(
+  test_probability >= final_threshold,
+  1,
+  0
+)
+
+test_prediction_label <- ifelse(
+  test_probability >= final_threshold,
+  "Yes",
+  "No"
+)
+# ============================================================
+# FINAL CONFUSION MATRIX
+# ============================================================
+
+confusion_matrix <- table(
+  Prediction = factor(
+    test_prediction,
+    levels = c(0, 1),
+    labels = c("No", "Yes")
+  ),
+  Reference = factor(
+    y_test,
+    levels = c(0, 1),
+    labels = c("No", "Yes")
+  )
+)
+
+cat("\n========================================\n")
+cat("V2 FINAL CONFUSION MATRIX\n")
+cat("Threshold = 0.205\n")
+cat("========================================\n\n")
+
+print(confusion_matrix)
+```
+```{r}
+# ============================================================
+# FINAL CLASSIFICATION METRICS
+# ============================================================
+
+TN <- confusion_matrix["No", "No"]
+FP <- confusion_matrix["Yes", "No"]
+FN <- confusion_matrix["No", "Yes"]
+TP <- confusion_matrix["Yes", "Yes"]
+
+sensitivity <- TP / (TP + FN)
+
+specificity <- TN / (TN + FP)
+
+ppv <- ifelse(
+  TP + FP > 0,
+  TP / (TP + FP),
+  NA
+)
+
+npv <- TN / (TN + FN)
+
+f1 <- ifelse(
+  2 * TP + FP + FN > 0,
+  2 * TP / (2 * TP + FP + FN),
+  NA
+)
+
+accuracy <- (TP + TN) / (
+  TP + TN + FP + FN
+)
+
+final_classification <- data.frame(
+  Metric = c(
+    "Threshold",
+    "Sensitivity",
+    "Specificity",
+    "PPV",
+    "NPV",
+    "F1",
+    "Accuracy"
+  ),
+  Value = c(
+    final_threshold,
+    sensitivity,
+    specificity,
+    ppv,
+    npv,
+    f1,
+    accuracy
+  )
+)
+
+cat("\n========================================\n")
+cat("V2 FINAL TEST-SET CLASSIFICATION\n")
+cat("========================================\n\n")
+
+print(
+  final_classification %>%
+    mutate(
+      Value = round(Value, 4)
+    ),
+  row.names = FALSE
+)
+```
+```{r}
+# ============================================================
+# V2 XGBOOST: SAMPLE PATIENT PREDICTION
+# ============================================================
+
+sample_patient <- data.frame(
+  sex = factor(
+    "MALE",
+    levels = levels(train_model$sex)
+  ),
+
+  age = 72,
+
+  race = factor(
+    "White",
+    levels = levels(train_model$race)
+  ),
+
+  prior_aspirin = 1,
+  prior_naproxen = 1,
+  prior_celecoxib = 1,
+
+  prior_peptic_ulcer = 1,
+  prior_ulcerative_colitis = 1,
+  prior_esophagitis = 1,
+  prior_diverticular_disease = 1
+)
+
+# ============================================================
+# CONVERT PATIENT TO XGBOOST INPUT FORMAT
+# ============================================================
+
+sample_matrix <- model.matrix(
+  xgb_formula,
+  data = sample_patient
+)
+
+sample_matrix <- sample_matrix[
+  ,
+  colnames(sample_matrix) != "(Intercept)",
+  drop = FALSE
+]
+
+
+# Ensure exactly the same columns as training data
+sample_matrix <- sample_matrix[
+  ,
+  colnames(x_train),
+  drop = FALSE
+]
+
+
+# Create XGBoost matrix
+sample_dmatrix <- xgb.DMatrix(
+  data = sample_matrix
+)
+
+
+# ============================================================
+# PREDICT GI BLEEDING RISK
+# ============================================================
+
+sample_probability <- predict(
+  final_xgb_model,
+  sample_dmatrix
+)
+
+
+# ============================================================
+# APPLY 0.205 THRESHOLD
+# ============================================================
+
+sample_risk <- ifelse(
+  sample_probability >= 0.205,
+  "HIGH RISK",
+  "LOW RISK"
+)
+
+
+# ============================================================
+# DISPLAY RESULT
+# ============================================================
+
+cat("\n========================================\n")
+cat("PATIENT GI BLEEDING RISK PREDICTION\n")
+cat("========================================\n\n")
+
+cat("Patient: TEST-001\n")
+cat("Age: 72\n")
+cat("Sex: Male\n")
+cat("Race: White\n\n")
+
+cat(
+  "Predicted probability:",
+  round(sample_probability, 4),
+  "\n"
+)
+
+cat(
+  "Predicted probability (%):",
+  round(sample_probability * 100, 2),
+  "%\n"
+)
+
+cat(
+  "Classification threshold:",
+  0.205,
+  "\n"
+)
+
+cat(
+  "Risk classification:",
+  sample_risk,
+  "\n"
+)
+```
+```{r}
+# ============================================================
+# XGBOOST FEATURE IMPORTANCE
+# ============================================================
+
+importance_matrix <- xgb.importance(
+  model = final_xgb_model
+)
+
+print(
+  importance_matrix
+)
+```
+```{r}
+xgb.plot.importance(
+  importance_matrix,
+  top_n = 10
+)
+```
+```{r}
+#Saving the Model
+
+v2_model_bundle <- list(
+  model = final_xgb_model,
+threshold = 0.205,
+  feature_names = colnames(x_train),
+  formula = xgb_formula,
+  sex_levels = levels(train_model$sex),
+  race_levels = levels(train_model$race)
+)
+
+saveRDS(
+  v2_model_bundle,
+  "v2_gi_bleeding_model.rds"
+)
+```
+```{r}
+# ============================================================
+# TEST SAVED MODEL BUNDLE
+# ============================================================
+
+loaded_model <- readRDS(
+  "v2_gi_bleeding_model.rds"
+)
+
+cat("Model loaded successfully.\n\n")
+
+cat(
+  "Threshold:",
+  loaded_model$threshold,
+  "\n"
+)
+
+cat(
+  "Number of model features:",
+  length(loaded_model$feature_names),
+  "\n"
+)
+
+cat("\nFeature names:\n")
+print(loaded_model$feature_names)
+
+cat("\nSex levels:\n")
+print(loaded_model$sex_levels)
+
+cat("\nRace levels:\n")
+print(loaded_model$race_levels)
+```
+```{r}
+xgb.save(
+  final_xgb_model,
+  "v2_gi_bleeding_model.ubj"
+)
+v2_model_metadata <- list(
+  threshold = 0.205,
+  feature_names = colnames(x_train),
+  formula = xgb_formula,
+  sex_levels = levels(train_model$sex),
+  race_levels = levels(train_model$race)
+)
+
+saveRDS(
+  v2_model_metadata,
+  "v2_model_metadata.rds"
+)
+```
+```{r}
+
+
+# ============================================================
+# VERIFY SAVED MODEL
+# ============================================================
+
+test_xgb_model <- xgb.load(
+  "v2_gi_bleeding_model.ubj"
+)
+
+cat("XGBoost model loaded successfully.\n")
+
+
+# ============================================================
+# VERIFY PREDICTIONS
+# ============================================================
+
+original_predictions <- predict(
+  final_xgb_model,
+  newdata = x_test
+)
+
+reloaded_predictions <- predict(
+  test_xgb_model,
+  newdata = x_test
+)
+
+prediction_difference <- max(
+  abs(original_predictions - reloaded_predictions)
+)
+
+cat(
+  "Maximum prediction difference:",
+  prediction_difference,
+  "\n"
+)
+```
+
+

@@ -101,7 +101,7 @@ dir.create(
 
 con <- dbConnect(
   SQLite(),
-  "GI_Bleeding_Hosting/patients.sqlite"
+  "patients.sqlite"
 )
 
 dbExecute(
